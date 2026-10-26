@@ -1,0 +1,82 @@
+{
+  "application": {
+    "name": "Point Cloud to Depth",
+    "description": "Projects point clouds into a pinhole camera on the GPU, producing z-buffered depth images (float32 meters or uint16) and optionally color images, with a reusable Holoscan 5 operator.",
+    "authors": [
+      {
+        "name": "Nitheesh Kumar",
+        "affiliation": "Independent"
+      }
+    ],
+    "language": "C++",
+    "version": "1.0.0",
+    "changelog": {
+      "1.0.0": "Initial release: PointCloudToDepthOp with extrinsics, z-buffering, square splats, optional colors and per-frame intrinsics; synthetic and PLY point cloud sources; PGM and PPM image output."
+    },
+    "holoscan_sdk": {
+      "minimum_required_version": "5.0.0",
+      "tested_versions": [
+        "5.0.0"
+      ]
+    },
+    "platforms": [
+      "x86_64",
+      "aarch64"
+    ],
+    "tags": [
+      "Robotics",
+      "Computer Vision and Perception",
+      "Point Cloud",
+      "Depth",
+      "3D"
+    ],
+    "ranking": 2,
+    "requirements": {
+      "hardware": [
+        {
+          "name": "NVIDIA GPU",
+          "description": "A CUDA-capable GPU supported by the Holoscan SDK."
+        }
+      ]
+    },
+    "default_mode": "synthetic",
+    "modes": {
+      "synthetic": {
+        "description": "Project 300 synthetic point clouds with colors, checking every depth and color pixel against ground truth.",
+        "build": {
+          "cmake_options": [
+            "-DBUILD_TESTING=OFF"
+          ]
+        },
+        "run": {
+          "command": "\"<holohub_app_bin>/point_cloud_to_depth\" --count 300",
+          "workdir": "holohub_app_bin"
+        }
+      },
+      "files": {
+        "description": "Project the binary little-endian PLY files in the data directory. Pass the image size and the camera's intrinsics with --run-args.",
+        "build": {
+          "cmake_options": [
+            "-DBUILD_TESTING=OFF"
+          ]
+        },
+        "run": {
+          "command": "\"<holohub_app_bin>/point_cloud_to_depth\" --source files --clouds \"<holohub_data_dir>/point_cloud_to_depth\"",
+          "workdir": "holohub_app_bin"
+        }
+      },
+      "ci": {
+        "description": "Finite headless check: 30 synthetic clouds in a body frame with colors and per-frame intrinsics, projected to uint16 depth, every pixel checked against ground truth.",
+        "build": {
+          "cmake_options": [
+            "-DBUILD_TESTING=OFF"
+          ]
+        },
+        "run": {
+          "command": "\"<holohub_app_bin>/point_cloud_to_depth\" --count 30 --period-ms 5 --depth-format uint16 --intrinsics-input true",
+          "workdir": "holohub_app_bin"
+        }
+      }
+    }
+  }
+}
