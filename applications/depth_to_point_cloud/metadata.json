@@ -1,0 +1,82 @@
+{
+  "application": {
+    "name": "Depth to Point Cloud",
+    "description": "Deprojects organized depth images (uint16 or float32) into organized, optionally colored, point clouds on the GPU with a reusable Holoscan 5 operator.",
+    "authors": [
+      {
+        "name": "Nitheesh Kumar",
+        "affiliation": "Independent"
+      }
+    ],
+    "language": "C++",
+    "version": "1.0.0",
+    "changelog": {
+      "1.0.0": "Initial release: DepthToPointCloudOp with optional color and per-frame intrinsics, synthetic and PGM depth sources, PLY output."
+    },
+    "holoscan_sdk": {
+      "minimum_required_version": "5.0.0",
+      "tested_versions": [
+        "5.0.0"
+      ]
+    },
+    "platforms": [
+      "x86_64",
+      "aarch64"
+    ],
+    "tags": [
+      "Robotics",
+      "Computer Vision and Perception",
+      "Point Cloud",
+      "Depth",
+      "3D"
+    ],
+    "ranking": 2,
+    "requirements": {
+      "hardware": [
+        {
+          "name": "NVIDIA GPU",
+          "description": "A CUDA-capable GPU supported by the Holoscan SDK."
+        }
+      ]
+    },
+    "default_mode": "synthetic",
+    "modes": {
+      "synthetic": {
+        "description": "Deproject 300 frames of a synthetic depth camera with color, checking every point and color against ground truth.",
+        "build": {
+          "cmake_options": [
+            "-DBUILD_TESTING=OFF"
+          ]
+        },
+        "run": {
+          "command": "\"<holohub_app_bin>/depth_to_point_cloud\" --count 300",
+          "workdir": "holohub_app_bin"
+        }
+      },
+      "images": {
+        "description": "Deproject the 8- or 16-bit PGM depth images in the data directory. Pass the camera's intrinsics with --run-args.",
+        "build": {
+          "cmake_options": [
+            "-DBUILD_TESTING=OFF"
+          ]
+        },
+        "run": {
+          "command": "\"<holohub_app_bin>/depth_to_point_cloud\" --source images --images \"<holohub_data_dir>/depth_to_point_cloud\"",
+          "workdir": "holohub_app_bin"
+        }
+      },
+      "ci": {
+        "description": "Finite headless check: 30 synthetic uint16 frames with color and per-frame intrinsics, every point and color checked against ground truth.",
+        "build": {
+          "cmake_options": [
+            "-DBUILD_TESTING=OFF"
+          ]
+        },
+        "run": {
+          "command": "\"<holohub_app_bin>/depth_to_point_cloud\" --count 30 --period-ms 5 --depth-format millimeters --intrinsics-input true",
+          "workdir": "holohub_app_bin"
+        }
+      }
+    }
+  }
+}
