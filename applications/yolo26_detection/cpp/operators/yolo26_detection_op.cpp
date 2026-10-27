@@ -112,6 +112,21 @@ holoscan::expected<void, holoscan::Error> hold_until_done(const holoscan::Tensor
   return {};
 }
 
+// HoloInfer's settings for `config`'s model, the same for prepare_engine() and
+// start() so that both find the same cached engine.
+std::shared_ptr<infer::InferenceSpecs> make_specs(const Yolo26DetectionConfig& config) {
+  auto specs = std::make_shared<infer::InferenceSpecs>(
+      "trt", infer::Mappings{}, infer::Mappings{{kModelName, config.model.string()}},
+      infer::MultiMappings{{kModelName, {kInputName}}},
+      infer::MultiMappings{{kModelName, {kOutputName}}}, infer::Mappings{}, infer::MultiMappings{},
+      /*dynamic_input_dims=*/false, /*is_engine_path=*/!is_onnx(config.model),
+      /*parallel_proc=*/false, config.fp16, /*cuda_buffer_in=*/true, /*cuda_buffer_out=*/true,
+      config.cuda_graphs, /*dla_core=*/-1, /*dla_gpu_fallback=*/false,
+      /*gpu_resident_inference=*/false, std::function<cudaStream_t(std::int32_t)>{});
+  specs->max_memory_ = config.build_workspace_bytes;
+  return specs;
+}
+
 template <std::size_t Rank>
 holoscan::expected<holoscan::TensorOutputLoan, holoscan::Error> allocate(
     holoscan::Output<holoscan::Tensor>& port, std::array<std::int64_t, Rank> shape,
@@ -161,6 +176,23 @@ void validate_config(const Yolo26DetectionConfig& config) {
   }
 }
 
+void prepare_engine(const Yolo26DetectionConfig& config) {
+  if (!is_onnx(config.model)) {
+    return;
+  }
+  HOLOSCAN_LOG_INFO(
+      "Yolo26DetectionOp: preparing {}; building its TensorRT engine takes a while "
+      "when none is cached",
+      config.model.string());
+  auto specs = make_specs(config);
+  infer::InferContext context;
+  const infer::InferStatus status = context.set_inference_params(specs);
+  if (status.get_code() != infer::holoinfer_code::H_SUCCESS) {
+    throw std::runtime_error("Yolo26DetectionOp: cannot load " + config.model.string() + ": " +
+                             status.get_message());
+  }
+}
+
 Yolo26DetectionOp::Yolo26DetectionOp(Yolo26DetectionConfig config) : config_(std::move(config)) {
   validate_config(config_);
 }
@@ -190,15 +222,7 @@ void Yolo26DetectionOp::start() {
   HOLOSCAN_LOG_INFO("Yolo26DetectionOp: loading {}{}", config_.model.string(),
                     onnx ? "; building its TensorRT engine takes a while when none is cached" : "");
   auto engine = std::make_unique<Engine>();
-  engine->specs = std::make_shared<infer::InferenceSpecs>(
-      "trt", infer::Mappings{}, infer::Mappings{{kModelName, config_.model.string()}},
-      infer::MultiMappings{{kModelName, {kInputName}}},
-      infer::MultiMappings{{kModelName, {kOutputName}}}, infer::Mappings{}, infer::MultiMappings{},
-      /*dynamic_input_dims=*/false, /*is_engine_path=*/!onnx,
-      /*parallel_proc=*/false, config_.fp16, /*cuda_buffer_in=*/true, /*cuda_buffer_out=*/true,
-      config_.cuda_graphs, /*dla_core=*/-1, /*dla_gpu_fallback=*/false,
-      /*gpu_resident_inference=*/false, std::function<cudaStream_t(std::int32_t)>{});
-  engine->specs->max_memory_ = config_.build_workspace_bytes;
+  engine->specs = make_specs(config_);
   engine->context = std::make_unique<infer::InferContext>();
   infer::InferStatus status = engine->context->set_inference_params(engine->specs);
   if (status.get_code() != infer::holoinfer_code::H_SUCCESS) {

@@ -71,6 +71,14 @@ struct Yolo26DetectionConfig {
 // @throws std::invalid_argument naming the first unusable field.
 void validate_config(const Yolo26DetectionConfig& config);
 
+// Builds and caches the TensorRT engine of an .onnx `config.model` unless one
+// is cached already. Call it before running the graph: some TensorRT releases
+// (10.13 among them) change the SIGINT and SIGTERM handlers while building,
+// which the SDK's managed signal handling accepts only before a run starts.
+// start() then loads the cached engine.
+// @throws std::runtime_error if the model cannot be built.
+void prepare_engine(const Yolo26DetectionConfig& config);
+
 class Yolo26DetectionOp final : public holoscan::Operator<> {
  public:
   // @throws std::invalid_argument if `config` is not valid.

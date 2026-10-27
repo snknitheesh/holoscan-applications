@@ -572,6 +572,8 @@ int execute(const Options& opts, SignalDomain& signals) {
     }
     std::cerr << "; an interrupt ends the process without a report\n";
   }
+  // Build the TensorRT engine now rather than in start(): see prepare_engine().
+  yd::prepare_engine(detection);
   auto session = signals ? holoscan::run_async(plan, *signals) : holoscan::run_async(plan);
   // The run times out when no result arrives for this long. Before the first
   // one, the detector may still be building its engine. The sums cannot

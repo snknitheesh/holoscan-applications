@@ -133,10 +133,10 @@ yolo26_app_test(yolo26_app_rejects_other_input_size 1
   --num-classes 2 --count 1)
 set_tests_properties(yolo26_app_engine_file PROPERTIES FIXTURES_REQUIRED "yolo26_stub;yolo26_images")
 set_tests_properties(yolo26_app_rejects_other_input_size PROPERTIES FIXTURES_REQUIRED yolo26_stub)
-# A file that is no model fails the run when the detector starts.
+# A file that is no model fails before the run starts, when its engine is built.
 set(_junk "${CMAKE_CURRENT_BINARY_DIR}/junk.onnx")
 file(WRITE "${_junk}" "not a model")
-yolo26_app_test(yolo26_app_rejects_junk_model 1 "cannot load .*junk\\.onnx.*verdict=FAIL"
+yolo26_app_test(yolo26_app_rejects_junk_model 1 "error: Yolo26DetectionOp: cannot load .*junk\\.onnx"
   --model "${_junk}" --count 1)
 
 # Invalid input fails fast with a usage error (exit status 2) instead of
