@@ -277,6 +277,12 @@ void Yolo26DetectionOp::start() {
   if (engine->input == nullptr || engine->output == nullptr) {
     throw std::runtime_error("Yolo26DetectionOp: the model buffers are not allocated");
   }
+  if (const cudaError_t created = cudaEventCreateWithFlags(&frame_done_, cudaEventDisableTiming);
+      created != cudaSuccess) {
+    frame_done_ = nullptr;
+    throw std::runtime_error(std::string("Yolo26DetectionOp: cudaEventCreateWithFlags: ") +
+                             cudaGetErrorString(created));
+  }
   HOLOSCAN_LOG_INFO("Yolo26DetectionOp: {} ready, input [1, 3, {}, {}], {} output rows",
                     config_.model.string(), size, size, engine->rows);
   engine_ = std::move(engine);
@@ -287,6 +293,10 @@ void Yolo26DetectionOp::stop() { release(); }
 void Yolo26DetectionOp::release() noexcept {
   // Freeing waits for the GPU work that may still use the buffers.
   engine_.reset();
+  if (frame_done_ != nullptr) {
+    cudaEventDestroy(frame_done_);
+    frame_done_ = nullptr;
+  }
   if (staging_ != nullptr) {
     cudaFree(staging_);
     staging_ = nullptr;
@@ -360,6 +370,22 @@ holoscan::expected<void, holoscan::Error> Yolo26DetectionOp::compute(
   if (device != 0) {
     return holoscan::make_unexpected(invalid("runs on GPU 0, where HoloInfer loads the model"));
   }
+  // The previous frame may have run on another stream: wait for its work on
+  // the buffers this one reuses, and mark this one's when it has been queued,
+  // on every way out.
+  if (const cudaError_t status = cudaStreamWaitEvent(stream, frame_done_, 0);
+      status != cudaSuccess) {
+    return holoscan::make_unexpected(cuda_failure("cudaStreamWaitEvent", status));
+  }
+  struct MarkDone {
+    cudaEvent_t event;
+    cudaStream_t stream;
+    ~MarkDone() {
+      if (event != nullptr) {
+        cudaEventRecord(event, stream);
+      }
+    }
+  } mark_done{frame_done_, stream};
 
   // The image.
   const holoscan::schema::ImageT& descriptor = sample->data;
@@ -423,7 +449,8 @@ holoscan::expected<void, holoscan::Error> Yolo26DetectionOp::compute(
   }
 
   // Letterbox into the model input, run the model, decode into the outputs,
-  // all in order on the stream; HoloInfer joins it with events.
+  // all in order on the stream; HoloInfer joins it with events. Frames before
+  // this one are done with the buffers: see frame_done_.
   const Letterbox letterbox =
       make_letterbox(static_cast<int>(width), static_cast<int>(height), config_.input_size);
   if (const cudaError_t status =
@@ -479,6 +506,10 @@ holoscan::expected<void, holoscan::Error> Yolo26DetectionOp::compute(
     if (auto committed = std::move(**writer).commit(); !committed) {
       return holoscan::make_unexpected(std::move(committed).error());
     }
+  }
+  mark_done.event = nullptr;
+  if (const cudaError_t status = cudaEventRecord(frame_done_, stream); status != cudaSuccess) {
+    return holoscan::make_unexpected(cuda_failure("cudaEventRecord", status));
   }
 
   // One set of options, so every output carries the image's capture time and

@@ -122,6 +122,10 @@ class Yolo26DetectionOp final : public holoscan::Operator<> {
   // A GPU copy of host images, grown as needed.
   void* staging_{};
   std::size_t staging_bytes_{};
+  // Recorded after each frame's work. The model's buffers and `staging_` are
+  // reused by every frame, but the runtime may give each activation another
+  // stream, so the next frame's stream waits for it before touching them.
+  cudaEvent_t frame_done_{};
 };
 
 }  // namespace yolo26_detection
