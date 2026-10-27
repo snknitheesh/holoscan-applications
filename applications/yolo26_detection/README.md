@@ -157,8 +157,9 @@ ONNX with its end-to-end head. `prepare_model.py` downloads the pinned
 its SHA-256 digest, exports it with the Ultralytics `yolo` command
 (`format=onnx nms=False`), checks the export's input and output, and writes
 `yolo26n.onnx` and `yolo26n.labels.txt`. It also downloads, and checks, the
-COCO validation image `000000039769.jpg`, which is subject to the
-[COCO terms of use](https://cocodataset.org/#termsofuse), into `images/`.
+COCO validation image `000000039769.jpg`, which is subject to the COCO terms
+of use (the Terms of Use page at [cocodataset.org](https://cocodataset.org/)),
+into `images/`.
 The script only runs the `yolo` command; it does not import Ultralytics.
 
 Installing `ultralytics` runs code from the Python package index, and its
