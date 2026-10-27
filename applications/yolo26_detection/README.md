@@ -22,9 +22,11 @@ detections. YOLO26 needs no non-maximum suppression, so nothing else runs.
 
 ```mermaid
 flowchart LR
-    S[Synthetic frames or JPEG and PPM files] -->|image| D[Yolo26DetectionOp]
+    S[Synthetic frames, JPEG and PPM files, or a webcam] -->|image| D[Yolo26DetectionOp]
     D -->|boxes, scores, class_ids, count| R[Report: truth, expectations, latency, PPM files]
     S -->|image, with --image-dir| R
+    D -->|with --display| O[Overlay: boxes and labels] --> V[HoloViz window]
+    S -->|with --display| V
 ```
 
 ## What it computes
@@ -131,17 +133,18 @@ application, build `cpp/operators/yolo26_detection_op.cpp`,
 ## Dependencies
 
 - Linux on x86_64 or aarch64 with an NVIDIA GPU and a compatible driver.
-- Holoscan SDK 5.0 Core, Sensor I/O and Inference (HoloInfer, with TensorRT
-  10), and for the tests, Testing.
+- Holoscan SDK 5.0 Core, Sensor I/O, Inference (HoloInfer, with TensorRT
+  10) and Visualization (HoloViz), and for the tests, Testing.
 - CMake 4.0+, a C++20 compiler and the CUDA toolkit, with nvJPEG.
 - Python 3.12–3.14 and the CLI pinned in the repository's
   [requirements.txt](../../requirements.txt) for repository workflows.
+- For the `camera` mode: a V4L2 webcam offering YUYV, and a display.
 - For the real model only: a separate Python environment with the
   `ultralytics` package and its ONNX exporter's dependencies, on the host.
 
 ## Prepare the model
 
-The `demo` and `files` modes and the real-model tests need YOLO26n exported to
+The `demo`, `files` and `camera` modes and the real-model tests need YOLO26n exported to
 ONNX with its end-to-end head. `prepare_model.py` downloads the pinned
 `yolo26n.pt` from the Ultralytics release
 [v8.4.0](https://github.com/ultralytics/assets/releases/tag/v8.4.0) and checks
@@ -190,6 +193,7 @@ To build and run on the host instead, install the dependencies, set
 | --- | --- |
 | `demo` (default) | YOLO26n on the prepared images, 300 frames looped, printing each image's detections once and the latency. |
 | `files` | YOLO26n on each image in `data/yolo26_detection/images` once, printing the detections and writing each image with its boxes drawn. |
+| `camera` | YOLO26n on a live webcam, with the detections drawn over it in a HoloViz window. |
 | `ci` | 30 synthetic BGR8 frames through TensorRT with the stub model, every detection checked against the frame's known ones. Needs no download. |
 
 The `demo` mode prints, for the COCO image:
@@ -221,7 +225,8 @@ apply, the truth check and the expected detections found. A gap in the frame
 ids fails the run, as does a run over files with nothing expected and no
 detection at all, which most likely means a wrong model, input size or
 threshold. Then comes a `verdict`: `PASS`, `FAIL`, or `STOPPED` when an
-interrupt ends the run early. It exits nonzero unless the verdict is `PASS`.
+interrupt or a closed window ends the run early. It exits nonzero unless the
+verdict is `PASS`, or `STOPPED` for a camera run without `--count`.
 
 `--run-args` appends options to the mode's command, for example
 `--run-args='--score-threshold 0.5 --fp16 true'`. `--expect FILE` lists
@@ -232,7 +237,36 @@ frame with its boxes drawn as `DIR/detections_NNNNNN.ppm`. `--encoding bgr8`
 decodes the files as BGR8. Run the executable with `--help` for every option.
 
 The modes build the application without its tests; `holoscan test` builds
-them separately.
+them separately. The `ci` mode also leaves out the display
+(`-DYOLO26_DETECTION_ENABLE_VISUALIZATION=OFF`), so it builds without
+HoloViz.
+
+### Webcam
+
+Allow the container to open a window, then run the `camera` mode:
+
+```bash
+xhost +local:
+holoscan run yolo26_detection camera
+```
+
+With a [standalone build](#standalone-build), run it from the repository
+root:
+
+```bash
+./build/yolo26-standalone/yolo26_detection --model data/yolo26_detection/yolo26n.onnx \
+  --labels data/yolo26_detection/yolo26n.labels.txt --source camera --device /dev/video0
+```
+
+The window shows each frame with its boxes, a color per class, and a
+`<class> 0.87` label above each box. The first run builds the TensorRT engine
+from the ONNX file, which takes 10 to 30 s, and caches it beside the file; later
+runs start in seconds. The camera must offer YUYV at the requested size
+(default 640x480, or for example `--width 1280 --height 720`); otherwise the
+run stops with the sizes it offers. To use another camera, list them with
+`v4l2-ctl --list-devices` and pass one with `--device /dev/videoN`. The run
+lasts until Ctrl+C or the window is closed. `--display true` shows synthetic
+frames too, and `--display false` runs the camera without a window.
 
 ## Performance
 
@@ -300,10 +334,14 @@ The suite checks:
   mislabeled channels (which swap the classes), the threshold and the
   capacity, provenance on every output, and unusable images, settings and
   models.
+- The detection overlay through the harness: each box's edges in its class's
+  color, the labels and their position, and a clear overlay without
+  detections. The webcam's YUYV conversion, without the SDK.
 - The application with the stub model on synthetic frames and on JPEG
   (baseline and progressive) and PPM files that a fixture writes, including
   FP16 engines, engine files, image output, expected detections, and the exit
-  status and verdict of failed, stopped and invalid runs.
+  status and verdict of failed, stopped and invalid runs, a missing camera,
+  and the display graph.
 - With the real model, the two cats and the remote that the Ultralytics
   predictor finds in the COCO image, in RGB8 and BGR8 and with an FP16 engine.
 - Without the SDK or a GPU, `prepare_model.py`: reading and checking exports,

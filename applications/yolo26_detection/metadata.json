@@ -11,7 +11,7 @@
     "language": "C++",
     "version": "1.0.0",
     "changelog": {
-      "1.0.0": "Initial release: Yolo26DetectionOp for RGB8, BGR8, RGBA8 and BGRA8 images in GPU or host memory; synthetic and JPEG/PPM image sources; a report with ground truth, expected detections, latency and annotated PPM output; a stub model for model-free tests."
+      "1.0.0": "Initial release: Yolo26DetectionOp for RGB8, BGR8, RGBA8 and BGRA8 images in GPU or host memory; synthetic, JPEG/PPM and V4L2 webcam image sources; a HoloViz display with boxes and labels; a report with ground truth, expected detections, latency and annotated PPM output; a stub model for model-free tests."
     },
     "holoscan_sdk": {
       "minimum_required_version": "5.0.0",
@@ -36,12 +36,17 @@
         {
           "name": "NVIDIA GPU",
           "description": "A CUDA-capable GPU supported by the Holoscan SDK."
+        },
+        {
+          "name": "Webcam",
+          "description": "A V4L2 camera offering YUYV, for the camera mode, which also needs a display.",
+          "required": false
         }
       ],
       "data": [
         {
           "name": "YOLO26n (Ultralytics, AGPL-3.0)",
-          "description": "Not part of this repository. The application-local prepare_model.py downloads the pinned weights and exports them to ONNX with the separately installed Ultralytics tool. Needed by the demo and files modes only.",
+          "description": "Not part of this repository. The application-local prepare_model.py downloads the pinned weights and exports them to ONNX with the separately installed Ultralytics tool. Needed by the demo, files and camera modes only.",
           "url": "https://github.com/ultralytics/assets/releases/tag/v8.4.0",
           "version": "v8.4.0"
         },
@@ -79,11 +84,24 @@
           "workdir": "holohub_app_bin"
         }
       },
+      "camera": {
+        "description": "Live webcam with detections drawn over it; needs /dev/video0, a display, and the prepared model.",
+        "build": {
+          "cmake_options": [
+            "-DBUILD_TESTING=OFF"
+          ]
+        },
+        "run": {
+          "command": "\"<holohub_app_bin>/yolo26_detection\" --model \"<holohub_data_dir>/yolo26_detection/yolo26n.onnx\" --labels \"<holohub_data_dir>/yolo26_detection/yolo26n.labels.txt\" --source camera",
+          "workdir": "holohub_app_bin"
+        }
+      },
       "ci": {
         "description": "Finite headless check without downloads: 30 synthetic BGR8 frames through TensorRT with the stub model, which stands in for YOLO26, every detection checked against the frame's known ones.",
         "build": {
           "cmake_options": [
-            "-DBUILD_TESTING=OFF"
+            "-DBUILD_TESTING=OFF",
+            "-DYOLO26_DETECTION_ENABLE_VISUALIZATION=OFF"
           ]
         },
         "run": {
