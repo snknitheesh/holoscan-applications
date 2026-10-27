@@ -8,9 +8,6 @@
 add_executable(pcd_project_test project_test.cu)
 target_link_libraries(pcd_project_test PRIVATE point_cloud_to_depth_core)
 
-add_executable(pcd_cloud_io_test cloud_io_test.cpp)
-target_link_libraries(pcd_cloud_io_test PRIVATE point_cloud_to_depth_core)
-
 add_executable(pcd_operator_test operator_test.cpp)
 target_link_libraries(pcd_operator_test PRIVATE
   point_cloud_to_depth_operators holoscan::testing)
@@ -21,8 +18,6 @@ target_link_libraries(pcd_write_test_clouds PRIVATE point_cloud_to_depth_core)
 add_library(pcd_spawn_thread_preload SHARED spawn_thread_preload.cpp)
 
 add_test(NAME pcd_project COMMAND pcd_project_test)
-add_test(NAME pcd_cloud_io
-  COMMAND pcd_cloud_io_test "${CMAKE_CURRENT_BINARY_DIR}/cloud_io_files")
 add_test(NAME pcd_operators
   COMMAND pcd_operator_test "${CMAKE_CURRENT_BINARY_DIR}/operator_files")
 
@@ -254,5 +249,5 @@ add_test(NAME pcd_app_without_signal_domain
 
 get_property(_tests DIRECTORY PROPERTY TESTS)
 set_tests_properties(${_tests} PROPERTIES LABELS "point_cloud_to_depth;gpu" TIMEOUT 300)
-set_tests_properties(pcd_cloud_io pcd_clouds_setup pcd_clouds_xyz_setup pcd_clouds_mixed_setup
+set_tests_properties(pcd_clouds_setup pcd_clouds_xyz_setup pcd_clouds_mixed_setup
   pcd_clouds_empty_setup PROPERTIES LABELS "point_cloud_to_depth")
