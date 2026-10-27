@@ -348,8 +348,11 @@ The suite checks:
 - Without the SDK or a GPU, `prepare_model.py`: reading and checking exports,
   checksums, a failed or missing exporter, and reuse of prepared files.
 
-Validated on x86_64 (RTX 5090) with SDK 5.0.0, CUDA 13.2 and TensorRT 10.16.
-aarch64 builds have not been run yet.
+Validated with SDK 5.0.0 on x86_64 (RTX 5090, CUDA 13.2, TensorRT 10.16; RTX
+5080 Laptop GPU, CUDA 13.0, TensorRT 10.13, with a USB webcam and an Intel
+RealSense) and on Jetson AGX Thor (JetPack 7, CUDA 13.0, TensorRT 10.15), where
+the real model's FP32 and FP16 engines give the same detections as on x86_64.
+The live camera mode has not been run on Jetson yet.
 
 ## License
 
