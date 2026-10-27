@@ -16,6 +16,11 @@ flowchart LR
     D -->|point_cloud, colors| R[Report: ground truth, statistics, PLY files]
 ```
 
+## Demo
+
+Videos of the application on synthetic input and on real input go in
+[tests/video](tests/video).
+
 ## What it computes
 
 For each pixel `(u, v)` with metric depth `Z = raw_depth * depth_scale`, the
