@@ -199,8 +199,8 @@ bool same(float a, float b) { return a == b || (std::isnan(a) && std::isnan(b));
 void check_equal(const Decoded& gpu, const Decoded& cpu, const std::string& what) {
   VERIFY_MSG(gpu.count == cpu.count,
              what + ": count " + std::to_string(gpu.count) + " vs " + std::to_string(cpu.count));
-  VERIFY_MSG(gpu.passed == cpu.passed, what + ": passed " + std::to_string(gpu.passed) + " vs " +
-                                           std::to_string(cpu.passed));
+  VERIFY_MSG(gpu.passed == cpu.passed,
+             what + ": passed " + std::to_string(gpu.passed) + " vs " + std::to_string(cpu.passed));
   std::size_t wrong = 0;
   for (std::size_t i = 0; i < cpu.boxes.size(); ++i) wrong += !same(gpu.boxes[i], cpu.boxes[i]);
   for (std::size_t i = 0; i < cpu.scores.size(); ++i) {

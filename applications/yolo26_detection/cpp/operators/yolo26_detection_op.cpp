@@ -284,7 +284,8 @@ void Yolo26DetectionOp::start() {
                              cudaGetErrorString(created));
   }
   void* passed = nullptr;
-  if (const cudaError_t allocated = cudaHostAlloc(&passed, sizeof(std::int32_t), cudaHostAllocMapped);
+  if (const cudaError_t allocated =
+          cudaHostAlloc(&passed, sizeof(std::int32_t), cudaHostAllocMapped);
       allocated != cudaSuccess) {
     throw std::runtime_error(std::string("Yolo26DetectionOp: cudaHostAlloc: ") +
                              cudaGetErrorString(allocated));
