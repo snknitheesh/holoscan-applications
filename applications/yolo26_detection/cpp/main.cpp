@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // YOLO26 Detection: images in, object detections out, on the GPU. A source
-// (synthetic frames with known detections, or JPEG and PPM files) feeds
-// Yolo26DetectionOp, whose detections a reporter checks, prints, times and
-// optionally draws onto the images, which it writes as PPM files.
+// (synthetic frames with known detections, JPEG and PPM files, or a webcam)
+// feeds Yolo26DetectionOp, whose detections a reporter checks, prints, times
+// and optionally draws onto the images, which it writes as PPM files. A
+// HoloViz window can show the frames with their detections drawn over them.
 
 #include <algorithm>
 #include <charconv>
@@ -35,6 +36,11 @@
 #include <holoscan/core/run_session.hpp>
 #include <holoscan/logger/logger.hpp>
 #include <holoscan/time/realtime_clock.hpp>
+#if YOLO26_DETECTION_ENABLE_VISUALIZATION
+#include <holoscan/visualization/holoviz_op.hpp>
+
+#include "operators/detection_overlay_op.hpp"
+#endif
 
 #include "detection/image_files.hpp"
 #include "detection/matching.hpp"
@@ -52,13 +58,15 @@ namespace yd = yolo26_detection;
 constexpr std::string_view kAppName = "yolo26_detection";
 constexpr std::string_view kStubModel = "stub";
 
-enum class Source { kSynthetic, kFiles };
+enum class Source { kSynthetic, kFiles, kCamera };
+enum class DisplayMode { kAuto, kOn, kOff };
 
 struct Options {
   Source source{Source::kSynthetic};
   std::filesystem::path images;
   // Found by validate() for --source files.
   std::vector<std::filesystem::path> image_files;
+  std::filesystem::path device{"/dev/video0"};
   bool loop{false};
   std::optional<std::uint32_t> count;
   std::uint32_t period_ms{33};
@@ -81,9 +89,19 @@ struct Options {
   std::optional<bool> verify;
   std::uint32_t timeout_seconds{120};
   std::uint32_t startup_timeout_seconds{900};
+  DisplayMode display{DisplayMode::kAuto};
   bool compile_only{false};
   bool help{false};
 };
+
+bool env_set(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr && *value != '\0';
+}
+
+bool display_available() {
+  return env_set("DISPLAY") || (env_set("WAYLAND_DISPLAY") && env_set("XDG_RUNTIME_DIR"));
+}
 
 bool parse_bool(std::string_view value, std::string_view option) {
   if (value == "true") return true;
@@ -127,11 +145,15 @@ Options parse_args(int argc, char** argv) {
         opts.source = Source::kSynthetic;
       } else if (value == "files") {
         opts.source = Source::kFiles;
+      } else if (value == "camera") {
+        opts.source = Source::kCamera;
       } else {
-        throw std::invalid_argument("--source must be synthetic or files");
+        throw std::invalid_argument("--source must be synthetic, files or camera");
       }
     } else if (option == "--images") {
       opts.images = value;
+    } else if (option == "--device") {
+      opts.device = value;
     } else if (option == "--loop") {
       opts.loop = parse_bool(value, option);
     } else if (option == "--count") {
@@ -172,6 +194,10 @@ Options parse_args(int argc, char** argv) {
       opts.timeout_seconds = parse_number<std::uint32_t>(value, option);
     } else if (option == "--startup-timeout-seconds") {
       opts.startup_timeout_seconds = parse_number<std::uint32_t>(value, option);
+    } else if (option == "--display") {
+      opts.display = value == "auto"             ? DisplayMode::kAuto
+                     : parse_bool(value, option) ? DisplayMode::kOn
+                                                 : DisplayMode::kOff;
     } else if (option == "--compile-only") {
       opts.compile_only = parse_bool(value, option);
     } else {
@@ -197,14 +223,19 @@ void usage(const char* argv0) {
          "  --fp16 true|false          Build the engine with FP16 allowed (default: false)\n"
          "  --labels FILE              Class names, one per line, for printing\n"
          "Input:\n"
-         "  --source synthetic|files   Synthetic frames or image files (default: synthetic)\n"
+         "  --source synthetic|files|camera\n"
+         "                             Synthetic frames, image files, or a V4L2 webcam\n"
+         "                             (default: synthetic)\n"
          "  --images PATH              A JPEG or PPM file, or a folder of them, in name order\n"
+         "  --device PATH              The webcam (default: /dev/video0)\n"
          "  --loop true|false          Repeat the files until --count frames (default: false)\n"
-         "  --count N                  Frames (default: 100 synthetic, every file once)\n"
+         "  --count N                  Frames (default: 100 synthetic, every file once,\n"
+         "                             camera until Ctrl+C)\n"
          "  --period-ms N              Source period, 1..1000 ms (default: 33)\n"
          "  --encoding rgb8|bgr8|rgba8|bgra8\n"
          "                             Image encoding (default: rgb8; files: rgb8 or bgr8)\n"
-         "  --width N --height N       Synthetic frame size (default: 1280x720)\n"
+         "  --width N --height N       Synthetic frame size (default: 1280x720), or a YUYV\n"
+         "                             size the camera offers (default: 640x480)\n"
          "  --host-input true|false    Send synthetic frames in host memory (default: false)\n"
          "Output:\n"
          "  --verify true|false        Check synthetic frames against their known detections\n"
@@ -214,6 +245,9 @@ void usage(const char* argv0) {
          "  --expect-iou F             Overlap an expected box needs (default: 0.8)\n"
          "  --image-dir DIR            Write each frame with its boxes as\n"
          "                             DIR/detections_NNNNNN.ppm\n"
+         "  --display auto|true|false  Show the frames with their detections in a HoloViz\n"
+         "                             window, for synthetic frames and the camera (default:\n"
+         "                             auto, on for the camera when a display is available)\n"
          "  --compile-only true|false  Build and check the graph without running it\n"
          "  --timeout-seconds N        Fail when no result arrives for N seconds plus two\n"
          "                             source periods (default: 120)\n"
@@ -224,12 +258,13 @@ void usage(const char* argv0) {
 
 bool is_stub(const Options& opts) { return opts.model == kStubModel; }
 
-int synthetic_width(const Options& opts) { return opts.width.value_or(1280); }
-int synthetic_height(const Options& opts) { return opts.height.value_or(720); }
+// Synthetic frames, or the camera's once validate() has set its size.
+int frame_width(const Options& opts) { return opts.width.value_or(1280); }
+int frame_height(const Options& opts) { return opts.height.value_or(720); }
 
 yd::SyntheticImageSourceConfig synthetic_source_config(const Options& opts) {
-  return yd::SyntheticImageSourceConfig{.width = synthetic_width(opts),
-                                        .height = synthetic_height(opts),
+  return yd::SyntheticImageSourceConfig{.width = frame_width(opts),
+                                        .height = frame_height(opts),
                                         .count = opts.count.value_or(0),
                                         .period = std::chrono::milliseconds(opts.period_ms),
                                         .format = opts.encoding,
@@ -242,6 +277,13 @@ yd::ImageFileSourceConfig file_source_config(const Options& opts) {
                                    .loop = opts.loop,
                                    .period = std::chrono::milliseconds(opts.period_ms),
                                    .bgr = opts.encoding == yd::PixelFormat::kBgr8};
+}
+
+yd::CameraSourceConfig camera_source_config(const Options& opts) {
+  return yd::CameraSourceConfig{.device = opts.device,
+                                .width = frame_width(opts),
+                                .height = frame_height(opts),
+                                .count = opts.count.value_or(0)};
 }
 
 // The detector's settings; the stub's model path is filled in by execute().
@@ -304,6 +346,23 @@ void validate(Options& opts) {
       throw std::invalid_argument("--count must be positive");
     }
     yd::validate_config(file_source_config(opts));
+  } else if (opts.source == Source::kCamera) {
+    if (!opts.images.empty() || opts.loop) {
+      throw std::invalid_argument("--images and --loop need --source files");
+    }
+    if (!opts.expect_file.empty() || opts.verify.value_or(false)) {
+      throw std::invalid_argument("--expect and --verify do not apply to the camera");
+    }
+    if (opts.host_input || opts.encoding != yd::PixelFormat::kRgb8) {
+      throw std::invalid_argument("the camera gives rgb8 frames in host memory");
+    }
+    if (opts.count && *opts.count == 0) {
+      throw std::invalid_argument("--count must be positive");
+    }
+    opts.verify = false;
+    opts.width = opts.width.value_or(640);
+    opts.height = opts.height.value_or(480);
+    yd::check_camera(camera_source_config(opts));
   } else {
     if (!opts.images.empty() || opts.loop) {
       throw std::invalid_argument("--images and --loop need --source files");
@@ -345,6 +404,26 @@ void validate(Options& opts) {
     }
   }
   yd::validate_config(detection_config(opts));
+
+  // The display: on for the camera when a display is available, unless set.
+  if (opts.display == DisplayMode::kAuto) {
+    opts.display = YOLO26_DETECTION_ENABLE_VISUALIZATION && opts.source == Source::kCamera &&
+                           display_available()
+                       ? DisplayMode::kOn
+                       : DisplayMode::kOff;
+  }
+  if (opts.display == DisplayMode::kOn) {
+    if (opts.source == Source::kFiles || opts.encoding != yd::PixelFormat::kRgb8) {
+      throw std::invalid_argument("--display shows rgb8 synthetic frames and the camera");
+    }
+    if (!YOLO26_DETECTION_ENABLE_VISUALIZATION) {
+      throw std::invalid_argument("--display needs a build with visualization enabled");
+    }
+    if (!display_available() && !opts.compile_only) {
+      throw std::invalid_argument(
+          "the display needs a display server; set DISPLAY or add --display false");
+    }
+  }
 }
 
 double percentile(std::vector<double> values, double fraction) {
@@ -366,26 +445,24 @@ int execute(const Options& opts, SignalDomain& signals) {
   }
 
   holoscan::Graph graph{std::string(kAppName)};
-  const std::uint32_t frames = *opts.count;
+  // Frames the run expects; 0 for a camera that runs until stopped.
+  const std::uint32_t frames = opts.count.value_or(0);
   const holoscan::Output<holoscan::schema::ImageT>* image_out = nullptr;
-  std::optional<holoscan::OperatorHandle<yd::SyntheticImageSourceOp>> synthetic;
-  std::optional<holoscan::OperatorHandle<yd::ImageFileSourceOp>> files;
   if (opts.source == Source::kSynthetic) {
-    synthetic.emplace(
-        graph.op<yd::SyntheticImageSourceOp>("source", synthetic_source_config(opts)));
-    image_out = &(*synthetic)->image;
+    image_out =
+        &graph.op<yd::SyntheticImageSourceOp>("source", synthetic_source_config(opts))->image;
+  } else if (opts.source == Source::kFiles) {
+    image_out = &graph.op<yd::ImageFileSourceOp>("source", file_source_config(opts))->image;
   } else {
-    files.emplace(graph.op<yd::ImageFileSourceOp>("source", file_source_config(opts)));
-    image_out = &(*files)->image;
+    image_out = &graph.op<yd::CameraSourceOp>("source", camera_source_config(opts))->image;
   }
   auto detector = graph.op<yd::Yolo26DetectionOp>("detector", detection);
 
   auto report = std::make_shared<yd::DetectionReport>();
   std::optional<yd::SyntheticTruth> truth;
   if (opts.source == Source::kSynthetic && opts.verify.value_or(false)) {
-    truth = yd::SyntheticTruth{.width = synthetic_width(opts),
-                               .height = synthetic_height(opts),
-                               .input_size = opts.input_size};
+    truth = yd::SyntheticTruth{
+        .width = frame_width(opts), .height = frame_height(opts), .input_size = opts.input_size};
   }
   auto reporter = graph.op<yd::DetectionReportOp>(
       "report", yd::DetectionReportConfig{.report = report,
@@ -412,6 +489,51 @@ int execute(const Options& opts, SignalDomain& signals) {
   if (!opts.image_dir.empty()) {
     graph.add_flow(*image_out, reporter->image, lossless);
   }
+
+#if YOLO26_DETECTION_ENABLE_VISUALIZATION
+  if (opts.display == DisplayMode::kOn) {
+    namespace viz = holoscan::visualization;
+    const auto width = static_cast<std::uint32_t>(frame_width(opts));
+    const auto height = static_cast<std::uint32_t>(frame_height(opts));
+    viz::LayerStack layers;
+    layers.add_image_layer("video", viz::ImageLayerDesc{.format = viz::ImageFormat::kR8G8B8Unorm,
+                                                        .max_width = width,
+                                                        .max_height = height});
+    // HoloViz blends RGBA image layers by their alpha, so the boxes go over the video.
+    layers.add_image_layer("boxes", viz::ImageLayerDesc{.format = viz::ImageFormat::kR8G8B8A8Unorm,
+                                                        .max_width = width,
+                                                        .max_height = height});
+    layers.add_text_layer(
+        "labels",
+        viz::TextLayerDesc{.max_glyphs = 2U * static_cast<std::uint32_t>(opts.max_detections) *
+                                         yd::kOverlayLabelBytes,
+                           .normalized_coordinates = true});
+    // Draw when the boxes arrive, over the newest image, which is theirs;
+    // triggering on the image would draw the previous frame's boxes.
+    const auto max_input_age =
+        std::max(4 * std::chrono::milliseconds(opts.period_ms), std::chrono::milliseconds{250});
+    auto visualizer = graph.op<viz::HolovizOp>(
+        "holoviz", std::move(layers),
+        viz::WindowSinkDesc{.title = "YOLO26 Detection", .width = width, .height = height},
+        viz::FrameTrigger{viz::LayerTrigger{1}}, max_input_age);
+    auto overlay = graph.op<yd::DetectionOverlayOp>(
+        "overlay", yd::DetectionOverlayConfig{.width = frame_width(opts),
+                                              .height = frame_height(opts),
+                                              .max_detections = opts.max_detections,
+                                              .labels = opts.labels});
+    // Best effort: the display keeps the newest sample and never holds back
+    // the detector.
+    const holoscan::ConnectionOptions latest{.queue_policy = holoscan::QueuePolicy::kDropOldest,
+                                             .queue_depth = 1U};
+    graph.add_flow(*image_out, visualizer->image_layer_input(0), latest);
+    graph.add_flow(detector->boxes, overlay->boxes, latest);
+    graph.add_flow(detector->scores, overlay->scores, latest);
+    graph.add_flow(detector->class_ids, overlay->class_ids, latest);
+    graph.add_flow(detector->count, overlay->count, latest);
+    graph.add_flow(overlay->overlay, visualizer->image_layer_input(1), latest);
+    graph.add_flow(overlay->labels, visualizer->tensor_layer_input(2), latest);
+  }
+#endif
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
 
   // GPU outputs are on device 0.
@@ -425,7 +547,7 @@ int execute(const Options& opts, SignalDomain& signals) {
   for (const char* port : {"boxes", "scores", "class_ids", "count"}) {
     on_gpu("detector", port);
   }
-  if (opts.source == Source::kFiles || !opts.host_input) {
+  if (opts.source == Source::kFiles || (opts.source == Source::kSynthetic && !opts.host_input)) {
     on_gpu("source", "image");
   }
   const auto plan = holoscan::compile(graph, std::move(compile_options));
@@ -495,8 +617,9 @@ int execute(const Options& opts, SignalDomain& signals) {
     }
   }
 
-  // A stop request (SIGINT, SIGTERM) ends the run early; that is not a
-  // failure, but not a pass either.
+  // A stop request (SIGINT, SIGTERM, a closed window) ends the run early;
+  // that is not a failure, but not a pass either. For a live camera it is the
+  // normal end.
   const bool stopped = !timed_out_after && termination == holoscan::RunTermination::kStopped;
   // Files with nothing to compare against and no detection at all most likely
   // mean a wrong model, input size or threshold; they do not pass.
@@ -516,8 +639,11 @@ int execute(const Options& opts, SignalDomain& signals) {
     mean += value / static_cast<double>(latencies.size());
   }
   std::cout << std::fixed << std::setprecision(3) << kAppName
-            << ": frames=" << report->frames.load() << '/' << frames
-            << " detections=" << report->detections;
+            << ": frames=" << report->frames.load();
+  if (frames != 0) {
+    std::cout << '/' << frames;
+  }
+  std::cout << " detections=" << report->detections;
   if (!latencies.empty()) {
     std::cout << " latency_ms: mean=" << mean << " p50=" << percentile(latencies, 0.5)
               << " p99=" << percentile(latencies, 0.99)
@@ -542,7 +668,7 @@ int execute(const Options& opts, SignalDomain& signals) {
                 : stopped ? "STOPPED"
                           : "FAIL")
             << '\n';
-  return passed ? 0 : 1;
+  return passed || (stopped && frames == 0) ? 0 : 1;
 }
 
 }  // namespace

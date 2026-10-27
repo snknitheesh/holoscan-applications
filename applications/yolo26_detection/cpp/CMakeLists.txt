@@ -9,6 +9,8 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
 endif()
 project(yolo26_detection LANGUAGES CXX CUDA)
 
+option(YOLO26_DETECTION_ENABLE_VISUALIZATION "Build the Holoscan Visualization display" ON)
+
 # The wheel's CTest driver does not forward --local-sdk-root into CMake.
 # Also honor the standard SDK environment variable for direct CMake consumers.
 if(DEFINED ENV{HOLOSCAN_SDK_ROOT})
@@ -20,6 +22,9 @@ endif()
 # HoloInfer, the SDK's TensorRT inference library, comes with its inference
 # component.
 set(_yolo26_holoscan_components core sensor_io inference)
+if(YOLO26_DETECTION_ENABLE_VISUALIZATION)
+  list(APPEND _yolo26_holoscan_components visualization)
+endif()
 if(BUILD_TESTING)
   # The operator tests use the SDK's operator test harness.
   list(APPEND _yolo26_holoscan_components testing)
@@ -60,6 +65,12 @@ target_include_directories(yolo26_detection_operators PUBLIC ${CMAKE_CURRENT_SOU
 target_link_libraries(yolo26_detection_operators PUBLIC
   yolo26_detection_core holoscan::core holoscan::sensor_io PRIVATE holoscan::infer)
 set_target_properties(yolo26_detection_operators PROPERTIES CXX_EXTENSIONS OFF)
+target_compile_definitions(yolo26_detection_operators PUBLIC
+  YOLO26_DETECTION_ENABLE_VISUALIZATION=$<BOOL:${YOLO26_DETECTION_ENABLE_VISUALIZATION}>)
+if(YOLO26_DETECTION_ENABLE_VISUALIZATION)
+  target_sources(yolo26_detection_operators PRIVATE operators/detection_overlay_op.cpp)
+  target_link_libraries(yolo26_detection_operators PUBLIC holoscan::visualization::op_holoviz)
+endif()
 
 add_executable(yolo26_detection main.cpp)
 target_link_libraries(yolo26_detection PRIVATE yolo26_detection_operators)

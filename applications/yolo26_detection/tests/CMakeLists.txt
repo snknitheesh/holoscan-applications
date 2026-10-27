@@ -167,10 +167,21 @@ yolo26_app_test(yolo26_app_rejects_zero_period 2 "^error: --period-ms" ${_stub} 
 yolo26_app_test(yolo26_app_rejects_encoding 2 "^error: --encoding" ${_stub} --encoding mono8)
 yolo26_app_test(yolo26_app_rejects_image_dir 2 "^error: --image-dir is not a directory"
   ${_stub} --image-dir "${_junk}")
+yolo26_app_test(yolo26_app_rejects_missing_camera 2 "^error: cannot open camera /dev/video99"
+  ${_stub} --source camera --device /dev/video99)
+yolo26_app_test(yolo26_app_rejects_display_with_files 2 "^error: --display shows rgb8"
+  ${_stub} --source files --images "${_files}" --display true)
+set_tests_properties(yolo26_app_rejects_display_with_files PROPERTIES
+  FIXTURES_REQUIRED yolo26_images)
 yolo26_app_test(yolo26_app_help 0 "^Usage: .*--model PATH\\|stub" --help)
 # Only the plan's verdict: an accepted plan has no warnings.
 yolo26_app_test(yolo26_app_compile_only 0 "^yolo26_detection: plan=OK\n*$"
   ${_stub} --compile-only true)
+if(YOLO26_DETECTION_ENABLE_VISUALIZATION)
+  # The display graph compiles, with or without a display to run it.
+  yolo26_app_test(yolo26_app_display_plan 0 "^yolo26_detection: plan=OK\n*$"
+    ${_stub} --display true --compile-only true)
+endif()
 
 # A stop request ends the run early with its own verdict, and the warning it
 # leaves is shown. The signal goes out once the first frame is written, so the

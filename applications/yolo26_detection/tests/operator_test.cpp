@@ -13,8 +13,11 @@
 
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -39,6 +42,11 @@
 #include "detection/synthetic_scene.hpp"
 #include "operators/yolo26_detection_op.hpp"
 #include "test_support.hpp"
+#if YOLO26_DETECTION_ENABLE_VISUALIZATION
+#include <holoscan/visualization/holoviz_op.hpp>
+
+#include "operators/detection_overlay_op.hpp"
+#endif
 
 namespace yolo26_detection {
 namespace {
@@ -53,15 +61,16 @@ const char* const kOutputs[] = {"boxes", "scores", "class_ids", "count"};
 
 enum class Memory { kDevice, kHost, kPinned };
 
-// A tensor holding `bytes`: in plain host memory, or copied into pinned host
-// or GPU memory.
+// A tensor of `dtype` holding `bytes`: in plain host memory, or copied into
+// pinned host or GPU memory.
 std::shared_ptr<holoscan::Tensor> image_tensor(std::vector<std::uint8_t> bytes,
-                                               std::vector<std::int64_t> shape, Memory memory) {
+                                               std::vector<std::int64_t> shape, Memory memory,
+                                               DLDataType dtype = {kDLUInt, 8, 1}) {
   if (memory == Memory::kDevice) {
     // From the SDK's allocator, whose memory says when it is ready to read.
-    auto tensor = holoscan::make_tensor(shape, DLDataType{kDLUInt, 8, 1}, std::nullopt,
-                                        holoscan::MemoryStorageType::kDevice,
-                                        std::make_shared<holoscan::UnboundedAllocator>());
+    auto tensor =
+        holoscan::make_tensor(shape, dtype, std::nullopt, holoscan::MemoryStorageType::kDevice,
+                              std::make_shared<holoscan::UnboundedAllocator>());
     if (!tensor) {
       throw std::runtime_error(tensor.error().message);
     }
@@ -97,7 +106,7 @@ std::shared_ptr<holoscan::Tensor> image_tensor(std::vector<std::uint8_t> bytes,
   storage->managed.dl_tensor = {.data = data,
                                 .device = {type, 0},
                                 .ndim = static_cast<std::int32_t>(storage->shape.size()),
-                                .dtype = {kDLUInt, 8, 1},
+                                .dtype = dtype,
                                 .shape = storage->shape.data(),
                                 .strides = nullptr,
                                 .byte_offset = 0};
@@ -401,6 +410,126 @@ void check_rejects_settings() {
   VERIFY(!rejects([](auto&) {}));
 }
 
+#if YOLO26_DETECTION_ENABLE_VISUALIZATION
+// `values` as a host tensor of `shape` and `dtype`.
+template <typename T>
+holoscan::Tensor host_tensor(const std::vector<T>& values, std::vector<std::int64_t> shape,
+                             DLDataType dtype) {
+  std::vector<std::uint8_t> bytes(values.size() * sizeof(T));
+  std::memcpy(bytes.data(), values.data(), bytes.size());
+  return *image_tensor(std::move(bytes), std::move(shape), Memory::kHost, dtype);
+}
+
+constexpr std::chrono::nanoseconds kOverlayCaptured = std::chrono::milliseconds(1234);
+namespace viz = holoscan::visualization;
+constexpr std::size_t kOverlayRowBytes = viz::kTextRunHeaderBytes + kOverlayLabelBytes;
+
+struct OverlayOutput {
+  holoscan::testing::SchemaSnapshot<holoscan::schema::ImageT> overlay;
+  TensorSnapshot labels;
+};
+
+// The first `n` of three detections, in a 200x100 image, through the
+// overlay; its two layers, or nothing if it failed.
+std::optional<OverlayOutput> run_overlay(const std::vector<float>& boxes,
+                                         const std::vector<float>& scores,
+                                         const std::vector<std::int32_t>& class_ids,
+                                         std::int32_t n) {
+  auto h = holoscan::testing::create_operator_test<DetectionOverlayOp>(DetectionOverlayConfig{
+      .width = 200, .height = 100, .max_detections = 3, .labels = {"person"}});
+  namespace ht = holoscan::testing;
+  h.push_frame(ht::frame_at(
+      kOverlayCaptured, ht::input("boxes", host_tensor(boxes, {3, 4}, {kDLFloat, 32, 1})),
+      ht::input("scores", host_tensor(scores, {3}, {kDLFloat, 32, 1})),
+      ht::input("class_ids", host_tensor(class_ids, {3}, {kDLInt, 32, 1})),
+      ht::input("count", host_tensor(std::vector<std::int32_t>{n}, {1}, {kDLInt, 32, 1}))));
+  h.capture_snapshot<holoscan::schema::ImageT>("overlay");
+  h.capture_snapshot<holoscan::Tensor>("labels");
+  const auto result = h.run();
+  VERIFY_MSG(result.ok(), result.describe_failure());
+  if (!result.ok()) return std::nullopt;
+  return OverlayOutput{result.snapshot<holoscan::schema::ImageT>("overlay"),
+                       result.snapshot<holoscan::Tensor>("labels")};
+}
+
+// The RGBA pixel at (x, y) of a 200x100 overlay.
+std::array<std::uint8_t, 4> pixel(const TensorSnapshot& image, int x, int y) {
+  const auto* p = reinterpret_cast<const std::uint8_t*>(image.bytes().data()) + (y * 200 + x) * 4;
+  return {p[0], p[1], p[2], p[3]};
+}
+
+// Row `row` of the labels: its header and its text.
+std::pair<viz::TextRunHeader, std::string> label_row(const TensorSnapshot& labels,
+                                                     std::size_t row) {
+  const auto* p = reinterpret_cast<const char*>(labels.bytes().data()) + row * kOverlayRowBytes;
+  viz::TextRunHeader header;
+  std::memcpy(&header, p, sizeof(header));
+  std::string text(p + viz::kTextRunHeaderBytes, kOverlayLabelBytes);
+  text.erase(std::min(text.find('\0'), text.size()));
+  return {header, text};
+}
+
+// Two detections: a box per detection, 2 px wide in its class's color, and a
+// shadowed label above each, named when the class has a name.
+void check_overlay() {
+  const auto out =
+      run_overlay({20, 30, 80, 60, 100, 15, 150, 100, 0, 0, 0, 0}, {0.87F, 0.5F, 0}, {1, 0, 0}, 2);
+  if (!out) return;
+  for (const auto* metadata : {&out->overlay.sample_metadata(), &out->labels.sample_metadata()}) {
+    VERIFY_MSG(metadata->capture_timestamp_ns == kOverlayCaptured.count(),
+               "overlay layers keep the detections' capture time, not " +
+                   std::to_string(metadata->capture_timestamp_ns) + " ns");
+  }
+  VERIFY(out->overlay.metadata().encoding == holoscan::schema::ImageEncoding_RGBA8);
+  const auto& image = out->overlay.tensor(holoscan::schema::ImageTensorFields::data);
+  VERIFY(image.shape() == (std::vector<std::int64_t>{100, 200, 4}));
+  using Rgba = std::array<std::uint8_t, 4>;
+  constexpr Rgba kClass0{230, 25, 75, 255};
+  constexpr Rgba kClass1{60, 180, 75, 255};
+  constexpr Rgba kClear{0, 0, 0, 0};
+  // The first box's edges, 2 px wide inside it, and its clear inside.
+  VERIFY(pixel(image, 20, 45) == kClass1 && pixel(image, 21, 45) == kClass1);
+  VERIFY(pixel(image, 22, 45) == kClear && pixel(image, 19, 45) == kClear);
+  VERIFY(pixel(image, 79, 45) == kClass1 && pixel(image, 78, 45) == kClass1);
+  VERIFY(pixel(image, 50, 30) == kClass1 && pixel(image, 50, 59) == kClass1);
+  VERIFY(pixel(image, 50, 45) == kClear && pixel(image, 50, 29) == kClear);
+  // The second box, in another color, its bottom edge on the image's last rows.
+  VERIFY(pixel(image, 100, 50) == kClass0 && pixel(image, 125, 99) == kClass0);
+  VERIFY(pixel(image, 10, 10) == kClear);
+
+  VERIFY(out->labels.shape() ==
+         (std::vector<std::int64_t>{6, static_cast<std::int64_t>(kOverlayRowBytes)}));
+  const auto [shadow, shadow_text] = label_row(out->labels, 0);
+  const auto [first, first_text] = label_row(out->labels, 1);
+  const auto [second_shadow, second_shadow_text] = label_row(out->labels, 2);
+  const auto [second, second_text] = label_row(out->labels, 3);
+  VERIFY(first_text == "class 1 0.87" && shadow_text == first_text);
+  VERIFY(second_text == "person 0.50" && second_shadow_text == second_text);
+  // Above the box, in its color; the shadow black and a little offset.
+  VERIFY(first.color == 0xFF4BB43CU && shadow.color == 0xFF000000U);
+  VERIFY(std::abs(first.x - 22.0F / 200) < 1e-6F && std::abs(first.y - 10.0F / 100) < 1e-6F);
+  VERIFY(shadow.x > first.x && shadow.y > first.y);
+  // Without room above the box, just inside its top.
+  VERIFY(std::abs(second.y - 17.0F / 100) < 1e-6F && second.color == 0xFF4B19E6U);
+  for (std::size_t row = 4; row < 6; ++row) {
+    VERIFY(label_row(out->labels, row).second.empty());
+  }
+}
+
+// No detections: a fully transparent overlay and no labels, so the previous
+// frame's boxes vanish.
+void check_overlay_empty() {
+  const auto out =
+      run_overlay({20, 30, 80, 60, 0, 0, 0, 0, 0, 0, 0, 0}, {0.87F, 0, 0}, {1, 0, 0}, 0);
+  if (!out) return;
+  const auto image = out->overlay.tensor(holoscan::schema::ImageTensorFields::data).bytes();
+  VERIFY(image.size() == 200U * 100U * 4U);
+  VERIFY(std::all_of(image.begin(), image.end(), [](std::byte b) { return b == std::byte{0}; }));
+  const auto labels = out->labels.bytes();
+  VERIFY(std::all_of(labels.begin(), labels.end(), [](std::byte b) { return b == std::byte{0}; }));
+}
+#endif
+
 }  // namespace
 }  // namespace yolo26_detection
 
@@ -414,7 +543,7 @@ int main(int argc, char** argv) {
   std::filesystem::create_directories(yd::g_directory);
   using yd::Memory;
   using yd::PixelFormat;
-  return yd::testing::run({
+  std::vector<yd::testing::TestCase> cases{
       {"RGB8 from the GPU, wide",
        [] { yd::check_detections(PixelFormat::kRgb8, Memory::kDevice, 1280, 720, 640); }},
       {"BGR8 from the GPU, tall",
@@ -431,5 +560,10 @@ int main(int argc, char** argv) {
       {"rejects unusable images", yd::check_rejects_images},
       {"rejects unusable models", yd::check_rejects_models},
       {"rejects unusable settings", yd::check_rejects_settings},
-  });
+  };
+#if YOLO26_DETECTION_ENABLE_VISUALIZATION
+  cases.push_back({"overlay boxes and labels", yd::check_overlay});
+  cases.push_back({"overlay clears without detections", yd::check_overlay_empty});
+#endif
+  return yd::testing::run(cases);
 }
