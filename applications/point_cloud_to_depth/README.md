@@ -16,6 +16,11 @@ flowchart LR
     P -->|depth, color| R[Report: ground truth, statistics, PGM and PPM files]
 ```
 
+## Demo
+
+Videos of the application on synthetic input and on real input go in
+[tests/video](tests/video).
+
 ## What it computes
 
 Each point `p` is first moved into the camera optical frame (x right, y down,
