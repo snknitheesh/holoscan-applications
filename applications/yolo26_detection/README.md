@@ -351,8 +351,9 @@ The suite checks:
 Validated with SDK 5.0.0 on x86_64 (RTX 5090, CUDA 13.2, TensorRT 10.16; RTX
 5080 Laptop GPU, CUDA 13.0, TensorRT 10.13, with a USB webcam and an Intel
 RealSense) and on Jetson AGX Thor (JetPack 7, CUDA 13.0, TensorRT 10.15), where
-the real model's FP32 and FP16 engines give the same detections as on x86_64.
-The live camera mode has not been run on Jetson yet.
+the real model's FP32 and FP16 engines give the same detections as on x86_64,
+and the camera mode ran live on a ZED-M (V4L2, 2560x720 and 1344x376), with and
+without the display.
 
 ## License
 
