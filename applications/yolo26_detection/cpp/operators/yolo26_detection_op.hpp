@@ -76,6 +76,11 @@ void validate_config(const Yolo26DetectionConfig& config);
 // (10.13 among them) change the SIGINT and SIGTERM handlers while building,
 // which the SDK's managed signal handling accepts only before a run starts.
 // start() then loads the cached engine.
+//
+// It loads the model fully, as start() does, and discards it, so a cached
+// engine is loaded twice: about 30 ms more at startup for YOLO26n on an RTX
+// 5090, and more for larger models. HoloInfer names its cached engines
+// internally, so whether one exists is known only by loading it.
 // @throws std::runtime_error if the model cannot be built.
 void prepare_engine(const Yolo26DetectionConfig& config);
 
