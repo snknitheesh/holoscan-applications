@@ -1,0 +1,96 @@
+{
+  "application": {
+    "name": "YOLO26 Detection",
+    "description": "End-to-end YOLO26 object detection on the GPU with a reusable Holoscan 5 operator: CUDA letterbox, TensorRT inference through the SDK's HoloInfer library, and GPU decoding into boxes in image pixels with scores, classes and a count.",
+    "authors": [
+      {
+        "name": "Nitheesh Kumar",
+        "affiliation": "Independent"
+      }
+    ],
+    "language": "C++",
+    "version": "1.0.0",
+    "changelog": {
+      "1.0.0": "Initial release: Yolo26DetectionOp for RGB8, BGR8, RGBA8 and BGRA8 images in GPU or host memory; synthetic and JPEG/PPM image sources; a report with ground truth, expected detections, latency and annotated PPM output; a stub model for model-free tests."
+    },
+    "holoscan_sdk": {
+      "minimum_required_version": "5.0.0",
+      "tested_versions": [
+        "5.0.0"
+      ]
+    },
+    "platforms": [
+      "x86_64",
+      "aarch64"
+    ],
+    "tags": [
+      "Computer Vision and Perception",
+      "Object Detection",
+      "YOLO",
+      "TensorRT",
+      "Robotics"
+    ],
+    "ranking": 2,
+    "requirements": {
+      "hardware": [
+        {
+          "name": "NVIDIA GPU",
+          "description": "A CUDA-capable GPU supported by the Holoscan SDK."
+        }
+      ],
+      "data": [
+        {
+          "name": "YOLO26n (Ultralytics, AGPL-3.0)",
+          "description": "Not part of this repository. The application-local prepare_model.py downloads the pinned weights and exports them to ONNX with the separately installed Ultralytics tool. Needed by the demo and files modes only.",
+          "url": "https://github.com/ultralytics/assets/releases/tag/v8.4.0",
+          "version": "v8.4.0"
+        },
+        {
+          "name": "COCO val2017 image 000000039769",
+          "description": "A sample image that prepare_model.py downloads for the demo and the real-model tests.",
+          "url": "https://cocodataset.org/#termsofuse",
+          "version": "2017"
+        }
+      ]
+    },
+    "default_mode": "demo",
+    "modes": {
+      "demo": {
+        "description": "Detect objects in the prepared sample image with YOLO26n, 300 times, printing its detections once and the latency per frame.",
+        "build": {
+          "cmake_options": [
+            "-DBUILD_TESTING=OFF"
+          ]
+        },
+        "run": {
+          "command": "\"<holohub_app_bin>/yolo26_detection\" --model \"<holohub_data_dir>/yolo26_detection/yolo26n.onnx\" --labels \"<holohub_data_dir>/yolo26_detection/yolo26n.labels.txt\" --source files --images \"<holohub_data_dir>/yolo26_detection/images\" --loop true --count 300 --period-ms 10",
+          "workdir": "holohub_app_bin"
+        }
+      },
+      "files": {
+        "description": "Detect objects in each JPEG and PPM image in the data directory once with YOLO26n, printing the detections and writing each image with its boxes drawn to the build directory.",
+        "build": {
+          "cmake_options": [
+            "-DBUILD_TESTING=OFF"
+          ]
+        },
+        "run": {
+          "command": "\"<holohub_app_bin>/yolo26_detection\" --model \"<holohub_data_dir>/yolo26_detection/yolo26n.onnx\" --labels \"<holohub_data_dir>/yolo26_detection/yolo26n.labels.txt\" --source files --images \"<holohub_data_dir>/yolo26_detection/images\" --image-dir .",
+          "workdir": "holohub_app_bin"
+        }
+      },
+      "ci": {
+        "description": "Finite headless check without downloads: 30 synthetic BGR8 frames through TensorRT with the stub model, which stands in for YOLO26, every detection checked against the frame's known ones.",
+        "build": {
+          "cmake_options": [
+            "-DBUILD_TESTING=OFF"
+          ]
+        },
+        "run": {
+          "command": "\"<holohub_app_bin>/yolo26_detection\" --model stub --count 30 --period-ms 5 --encoding bgr8",
+          "workdir": "holohub_app_bin"
+        }
+      }
+    }
+  }
+}
