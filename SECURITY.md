@@ -62,11 +62,7 @@ The principal security boundaries are:
 2. **Build dependency substitution:** `Dockerfile` accepts a caller-provided
    `BASE_IMAGE`, and Python installation uses the default package index
    (PyPI). An untrusted image, compromised index, or package-name
-   collision could introduce code during container or CI builds. Some
-   applications' data preparation runs third-party model exporters that users
-   install from PyPI outside the repository's pins, such as the Ultralytics
-   exporter for `yolo26_detection`; their READMEs describe the risk and ask
-   for an isolated environment.
+   collision could introduce code during container or CI builds.
 3. **CI and lint supply-chain compromise:** GitHub Actions and remote pre-commit
    hooks execute third-party code selected by version tags. A compromised
    upstream release or mutable tag could affect CI runners and developer
@@ -75,7 +71,10 @@ The principal security boundaries are:
    datasets, device streams, model files, or external-service responses. The
    repository framework does not centrally authenticate, validate, or constrain
    those inputs, so malformed or adversarial data must be handled by each
-   application and its dependencies.
+   application and its dependencies. Some applications' model files come from
+   third-party exporters that users install from PyPI outside the repository's
+   pins, such as the Ultralytics exporter for `yolo26_detection`; their
+   READMEs describe the risk and ask for an isolated environment.
 5. **Resource exhaustion and unsafe device access:** Applications can perform
    GPU-intensive processing and interact with attached hardware. Unbounded
    inputs or incorrect device configuration could exhaust CPU, GPU, memory, or
