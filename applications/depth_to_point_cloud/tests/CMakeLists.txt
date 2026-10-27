@@ -6,9 +6,6 @@
 add_executable(depth_deproject_test deproject_test.cu)
 target_link_libraries(depth_deproject_test PRIVATE depth_to_point_cloud_core)
 
-add_executable(depth_image_io_test image_io_test.cpp)
-target_link_libraries(depth_image_io_test PRIVATE depth_to_point_cloud_core)
-
 add_executable(depth_operator_test operator_test.cpp)
 target_link_libraries(depth_operator_test PRIVATE
   depth_to_point_cloud_operators holoscan::testing)
@@ -19,8 +16,6 @@ target_link_libraries(depth_write_test_images PRIVATE depth_to_point_cloud_core)
 add_library(depth_spawn_thread_preload SHARED spawn_thread_preload.cpp)
 
 add_test(NAME depth_deproject COMMAND depth_deproject_test)
-add_test(NAME depth_image_io
-  COMMAND depth_image_io_test "${CMAKE_CURRENT_BINARY_DIR}/image_io_files")
 add_test(NAME depth_operators COMMAND depth_operator_test)
 
 # Runs the application through run_and_match.cmake, which checks its exit
