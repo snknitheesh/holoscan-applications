@@ -42,7 +42,10 @@ function(yolo26_app_test name status output)
       -P "${_run_and_match}" -- $<TARGET_FILE:yolo26_detection> ${ARGN})
 endfunction()
 
-# Builds the stub model's engine once, for the tests that use its files.
+# Builds the stub model's engine once, before the tests that run it, so that
+# parallel tests (ctest -j) load the cached engine rather than each building and
+# writing it at once. The FP16 and 320-pixel tests have caches of their own,
+# each locked for its users.
 add_test(NAME yolo26_stub_setup
   COMMAND yolo26_detection --model stub --count 1 --period-ms 1)
 set_tests_properties(yolo26_stub_setup PROPERTIES FIXTURES_SETUP yolo26_stub)
@@ -73,6 +76,11 @@ yolo26_app_test(yolo26_app_capacity_too_small 1
   ${_stub} --count 20 --max-detections 1)
 yolo26_app_test(yolo26_app_threshold_too_high 1 "detections=0 .*missed=40 .*verdict=FAIL"
   ${_stub} --count 20 --score-threshold 0.95)
+set_tests_properties(yolo26_app_synthetic yolo26_app_bgr8 yolo26_app_rgba8_host
+  yolo26_app_bgra8_tall yolo26_app_odd_padding yolo26_app_small yolo26_app_capacity_too_small
+  yolo26_app_threshold_too_high PROPERTIES FIXTURES_REQUIRED yolo26_stub)
+set_tests_properties(yolo26_app_input_320 PROPERTIES RESOURCE_LOCK yolo26_stub_320)
+set_tests_properties(yolo26_app_fp16 PROPERTIES RESOURCE_LOCK yolo26_stub_fp16)
 
 # Image output: each frame with its boxes drawn.
 set(_images "${CMAKE_CURRENT_BINARY_DIR}/images")
@@ -80,6 +88,7 @@ add_test(NAME yolo26_app_image_dir
   COMMAND ${CMAKE_COMMAND} -DEXPECT_EXIT=0 "-DEXPECT_OUTPUT=files_written=3 .*verdict=PASS"
     "-DMAKE_DIRECTORY=${_images}" -P "${_run_and_match}" --
     $<TARGET_FILE:yolo26_detection> ${_stub} --count 3 --image-dir "${_images}")
+set_tests_properties(yolo26_app_image_dir PROPERTIES FIXTURES_REQUIRED yolo26_stub)
 
 # Image files of synthetic scenes, written by the fixture: a baseline JPEG, a
 # PPM and a progressive JPEG, decoded as RGB8 or BGR8, each with the stub
@@ -117,7 +126,8 @@ yolo26_app_test(yolo26_app_rejects_verify_with_files 2 "^error: --verify checks 
   ${_stub} --source files --images "${_files}" --verify true)
 set_tests_properties(yolo26_app_files yolo26_app_files_bgr8 yolo26_app_files_loop
   yolo26_app_one_file yolo26_app_files_unmatched yolo26_app_files_none_found
-  yolo26_app_rejects_count_beyond_files yolo26_app_rejects_rgba8_files
+  PROPERTIES FIXTURES_REQUIRED "yolo26_stub;yolo26_images")
+set_tests_properties(yolo26_app_rejects_count_beyond_files yolo26_app_rejects_rgba8_files
   yolo26_app_rejects_size_with_files yolo26_app_rejects_verify_with_files
   PROPERTIES FIXTURES_REQUIRED yolo26_images)
 
@@ -212,6 +222,8 @@ add_test(NAME yolo26_app_without_signal_domain
     -P "${_run_and_match}" -- ${CMAKE_COMMAND} -E env
     LD_PRELOAD=$<TARGET_FILE:yolo26_spawn_thread_preload>
     $<TARGET_FILE:yolo26_detection> --model stub --count 10 --period-ms 5)
+set_tests_properties(yolo26_app_stopped yolo26_app_without_signal_domain PROPERTIES
+  FIXTURES_REQUIRED yolo26_stub)
 
 # The real YOLO26n model on a COCO validation image, in RGB8 and BGR8, and
 # with FP16: the two cats and the remote that Ultralytics' own predictor finds
