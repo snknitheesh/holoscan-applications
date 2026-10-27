@@ -9,14 +9,20 @@ include(CTest)
 option(HOLOHUB_BUILD_CPP "Build support for C++" ON)
 
 # The model preparation tests use fixtures and run without the SDK, a GPU,
-# Ultralytics or the network. Keep their registration outside the C++
-# dependency scope for hosted CI.
+# Ultralytics or the network, and the webcam's YUYV conversion is header-only.
+# Keep their registration outside the C++ dependency scope for hosted CI.
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_test(NAME yolo26_prepare_model
     COMMAND ${Python3_EXECUTABLE} -m unittest discover
       -s ${CMAKE_CURRENT_SOURCE_DIR}/tests -p test_prepare_model.py -v)
-  set_tests_properties(yolo26_prepare_model PROPERTIES LABELS "yolo26_detection" TIMEOUT 60)
+  enable_language(CXX)
+  add_executable(yolo26_yuyv_test tests/yuyv_test.cpp)
+  target_include_directories(yolo26_yuyv_test PRIVATE cpp tests)
+  target_compile_features(yolo26_yuyv_test PRIVATE cxx_std_20)
+  add_test(NAME yolo26_yuyv COMMAND yolo26_yuyv_test)
+  set_tests_properties(yolo26_prepare_model yolo26_yuyv PROPERTIES
+    LABELS "yolo26_detection" TIMEOUT 60)
 endif()
 
 if(HOLOHUB_BUILD_CPP)

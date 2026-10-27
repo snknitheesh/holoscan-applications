@@ -5,11 +5,12 @@
 // for the stub model, and a list of JPEG or PPM files. Both emit a fixed
 // number of frames on a clock, numbered from 1, then idle. A frame that a
 // busy consumer pushes back is sent again on the next tick with its original
-// capture time.
+// capture time. And a V4L2 webcam, whose frames a busy consumer drops instead.
 
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -107,6 +108,55 @@ class ImageFileSourceOp final : public holoscan::Operator<> {
   std::uint32_t emitted_{};
   std::optional<holoscan::TimePoint> pending_capture_;
   std::unique_ptr<JpegDecoder> decoder_;
+};
+
+struct CameraSourceConfig {
+  std::filesystem::path device{"/dev/video0"};
+  int width{640};
+  int height{480};
+  // Frames to emit; 0 runs until the application is stopped.
+  std::uint32_t count{0};
+};
+
+// Checks that `config.device` offers YUYV at the configured size.
+// @throws std::invalid_argument naming what is wrong, with the YUYV sizes the
+// device offers when the size is the problem.
+void check_camera(const CameraSourceConfig& config);
+
+// RGB8 frames in host memory from a V4L2 camera offering YUYV at the
+// requested size, numbered from 1 and stamped with their capture time. Only
+// the newest frame is kept; one arriving while the detector is busy is
+// dropped.
+class CameraSourceOp final : public holoscan::Operator<> {
+ public:
+  // Opens the device and sets its format.
+  // @throws std::invalid_argument as check_camera() does.
+  explicit CameraSourceOp(CameraSourceConfig config);
+  ~CameraSourceOp() override;
+
+  void setup(holoscan::OperatorSpec& spec) override;
+  [[nodiscard]] holoscan::Contract contract() const override;
+  void start() override;
+  void stop() override;
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override;
+
+  holoscan::Output<holoscan::schema::ImageT> image;
+
+ private:
+  struct Mapping {
+    void* data{};
+    std::size_t length{};
+  };
+
+  void unmap() noexcept;
+  void release() noexcept;
+
+  CameraSourceConfig config_;
+  int fd_{-1};
+  std::size_t pitch_{};
+  std::vector<Mapping> buffers_;
+  std::uint32_t emitted_{};
 };
 
 }  // namespace yolo26_detection
