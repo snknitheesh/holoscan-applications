@@ -298,11 +298,11 @@ The suite checks:
 - Image output, and the exit status and verdict of failed, empty, slow,
   timed-out, stopped and invalid runs.
 
-All of it builds with the SDK; the PLY reader tests run without a GPU, the
-rest with one. None of it needs data.
+The PLY reader test needs neither the SDK nor a GPU, and also runs on hosted
+CI; the rest needs both. None of it needs data.
 
-Validated on x86_64 (RTX 5090) with SDK 5.0.0 and CUDA 13.2. aarch64 builds
-have not been run yet.
+Validated with SDK 5.0.0 on x86_64 (RTX 5090, CUDA 13.2; RTX 5080 Laptop GPU,
+CUDA 13.0) and on Jetson AGX Thor (JetPack 7, CUDA 13.0).
 
 ## License
 
