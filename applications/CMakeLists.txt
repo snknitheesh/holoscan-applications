@@ -3,3 +3,4 @@
 
 # Keep applications in alphabetical order.
 add_holoscan_application(endoscopy_tool_tracking)
+add_holoscan_application(yolo26_detection)
