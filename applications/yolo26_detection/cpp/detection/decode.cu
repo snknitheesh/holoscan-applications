@@ -51,13 +51,16 @@ __device__ bool decode_row(const float* row, const DecodeParams& p, Box& box, in
 }
 
 // One block walks the rows in chunks, compacting the kept ones with a block
-// scan so they keep their order, then zeroes the unused slots.
+// scan so they keep their order, then zeroes the unused slots. Once the
+// outputs are full it stops, unless it must count the rows kept beyond them.
 __global__ void decode_kernel(const float* rows, DecodeParams p, DecodeOutputs out) {
   using Scan = cub::BlockScan<int, kThreads>;
   __shared__ typename Scan::TempStorage scan_storage;
   __shared__ int written;
+  __shared__ int passed;
   if (threadIdx.x == 0) {
     written = 0;
+    passed = 0;
   }
   __syncthreads();
   for (int base = 0; base < p.rows; base += kThreads) {
@@ -81,9 +84,10 @@ __global__ void decode_kernel(const float* rows, DecodeParams p, DecodeOutputs o
     __syncthreads();  // Every thread has read `written`, and the scan storage is free.
     if (threadIdx.x == 0) {
       written = min(written + kept, p.capacity);
+      passed += kept;
     }
     __syncthreads();
-    if (written >= p.capacity) {
+    if (written >= p.capacity && out.passed == nullptr) {
       break;
     }
   }
@@ -97,6 +101,9 @@ __global__ void decode_kernel(const float* rows, DecodeParams p, DecodeOutputs o
   }
   if (threadIdx.x == 0) {
     *out.count = written;
+    if (out.passed != nullptr) {
+      *out.passed = passed;
+    }
   }
 }
 

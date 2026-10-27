@@ -39,12 +39,15 @@ struct DecodeParams {
 
 // GPU outputs: `boxes` holds capacity x [x1, y1, x2, y2] in image pixels,
 // `scores` and `class_ids` capacity values, and `count` one int32, the
-// detections written. Slots from `count` on are zero.
+// detections written. Slots from `count` on are zero. `passed`, if given,
+// gets the number of rows kept before the capacity cut, so a caller can tell
+// that some were dropped; it may be mapped host memory.
 struct DecodeOutputs {
   float* boxes{};
   float* scores{};
   std::int32_t* class_ids{};
   std::int32_t* count{};
+  std::int32_t* passed{};
 };
 
 // Decodes `rows` (params.rows x kRowFields floats in GPU memory) on `stream`.

@@ -283,12 +283,38 @@ void Yolo26DetectionOp::start() {
     throw std::runtime_error(std::string("Yolo26DetectionOp: cudaEventCreateWithFlags: ") +
                              cudaGetErrorString(created));
   }
+  void* passed = nullptr;
+  if (const cudaError_t allocated = cudaHostAlloc(&passed, sizeof(std::int32_t), cudaHostAllocMapped);
+      allocated != cudaSuccess) {
+    throw std::runtime_error(std::string("Yolo26DetectionOp: cudaHostAlloc: ") +
+                             cudaGetErrorString(allocated));
+  }
+  passed_ = static_cast<std::int32_t*>(passed);
+  *passed_ = 0;
+  warned_dropped_ = false;
   HOLOSCAN_LOG_INFO("Yolo26DetectionOp: {} ready, input [1, 3, {}, {}], {} output rows",
                     config_.model.string(), size, size, engine->rows);
   engine_ = std::move(engine);
 }
 
-void Yolo26DetectionOp::stop() { release(); }
+void Yolo26DetectionOp::stop() {
+  // The last frame's count, before its memory goes.
+  if (frame_done_ != nullptr && cudaEventSynchronize(frame_done_) == cudaSuccess) {
+    warn_if_dropped();
+  }
+  release();
+}
+
+void Yolo26DetectionOp::warn_if_dropped() {
+  if (warned_dropped_ || passed_ == nullptr || *passed_ <= config_.max_detections) {
+    return;
+  }
+  warned_dropped_ = true;
+  HOLOSCAN_LOG_WARN(
+      "Yolo26DetectionOp: {} detections passed the score threshold in a frame, more than "
+      "max_detections ({}); the lowest-ranked were dropped. Raise max_detections to keep them",
+      *passed_, config_.max_detections);
+}
 
 void Yolo26DetectionOp::release() noexcept {
   // Freeing waits for the GPU work that may still use the buffers.
@@ -296,6 +322,10 @@ void Yolo26DetectionOp::release() noexcept {
   if (frame_done_ != nullptr) {
     cudaEventDestroy(frame_done_);
     frame_done_ = nullptr;
+  }
+  if (passed_ != nullptr) {
+    cudaFreeHost(passed_);
+    passed_ = nullptr;
   }
   if (staging_ != nullptr) {
     cudaFree(staging_);
@@ -369,6 +399,13 @@ holoscan::expected<void, holoscan::Error> Yolo26DetectionOp::compute(
   }
   if (device != 0) {
     return holoscan::make_unexpected(invalid("runs on GPU 0, where HoloInfer loads the model"));
+  }
+  // A finished previous frame's count of passed rows; a frame still running
+  // is checked by a later one, or by stop().
+  if (const cudaError_t query = cudaEventQuery(frame_done_); query == cudaSuccess) {
+    warn_if_dropped();
+  } else if (query == cudaErrorNotReady && cudaPeekAtLastError() == cudaErrorNotReady) {
+    cudaGetLastError();  // Not an error; keep it from the kernel launch checks.
   }
   // The previous frame may have run on another stream: wait for its work on
   // the buffers this one reuses, and mark this one's when it has been queued,
@@ -497,7 +534,8 @@ holoscan::expected<void, holoscan::Error> Yolo26DetectionOp::compute(
                         DecodeOutputs{.boxes = boxes_writer->data_as<float>(),
                                       .scores = scores_writer->data_as<float>(),
                                       .class_ids = class_ids_writer->data_as<std::int32_t>(),
-                                      .count = count_writer->data_as<std::int32_t>()},
+                                      .count = count_writer->data_as<std::int32_t>(),
+                                      .passed = passed_},
                         stream);
       status != cudaSuccess) {
     return holoscan::make_unexpected(cuda_failure("decode kernel", status));

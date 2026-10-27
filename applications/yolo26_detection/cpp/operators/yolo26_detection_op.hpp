@@ -54,7 +54,7 @@ struct Yolo26DetectionConfig {
   // Detections need at least this score, in [0, 1].
   float score_threshold{0.25F};
   // Capacity of the outputs, 1..kMaxRows; further detections are dropped,
-  // the lowest scores first.
+  // the lowest scores first, and a warning says so once per run.
   int max_detections{300};
   // The model's class count; rows with another class value are dropped.
   int num_classes{80};
@@ -116,6 +116,9 @@ class Yolo26DetectionOp final : public holoscan::Operator<> {
       const holoscan::Tensor& tensor, int width, int height, int channels, std::size_t pitch,
       cudaStream_t stream);
   void release() noexcept;
+  // Warns, once per run, if a finished frame had more detections than the
+  // outputs hold.
+  void warn_if_dropped();
 
   Yolo26DetectionConfig config_;
   std::unique_ptr<Engine> engine_;
@@ -126,6 +129,10 @@ class Yolo26DetectionOp final : public holoscan::Operator<> {
   // reused by every frame, but the runtime may give each activation another
   // stream, so the next frame's stream waits for it before touching them.
   cudaEvent_t frame_done_{};
+  // Mapped host memory where the decode writes how many rows passed, before
+  // the capacity cut; read once frame_done_ has completed.
+  std::int32_t* passed_{};
+  bool warned_dropped_{};
 };
 
 }  // namespace yolo26_detection

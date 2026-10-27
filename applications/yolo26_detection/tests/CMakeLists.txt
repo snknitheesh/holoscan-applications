@@ -67,8 +67,9 @@ yolo26_app_test(yolo26_app_input_320 0 "frames=20/20 .*${_truth}"
   ${_stub} --count 20 --width 1920 --height 1080 --input-size 320)
 yolo26_app_test(yolo26_app_fp16 0 "frames=20/20 .*${_truth}" ${_stub} --count 20 --fp16 true)
 # Wrong detections fail the run: too small a capacity drops the second one of
-# every frame, too high a threshold both.
-yolo26_app_test(yolo26_app_capacity_too_small 1 "missed=20 extra=0 .*verdict=FAIL"
+# every frame, and says so, too high a threshold both.
+yolo26_app_test(yolo26_app_capacity_too_small 1
+  "2 detections passed the score threshold in a frame, more than max_detections \\(1\\).*missed=20 extra=0 .*verdict=FAIL"
   ${_stub} --count 20 --max-detections 1)
 yolo26_app_test(yolo26_app_threshold_too_high 1 "detections=0 .*missed=40 .*verdict=FAIL"
   ${_stub} --count 20 --score-threshold 0.95)

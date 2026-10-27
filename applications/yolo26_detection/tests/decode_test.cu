@@ -4,7 +4,8 @@
 // The decode kernel against a host decode of the same rows: the score
 // threshold and its boundary, invalid and non-finite classes, scores and
 // corners, boxes clamped to the image and dropped when nothing is left,
-// order, capacity, the count and the zeroed slots after it, inputs of several
+// order, capacity, the count and the zeroed slots after it, the rows kept
+// before the capacity cut, with and without counting them, inputs of several
 // block-sized chunks, and boxes mapped back through letterboxes with
 // padding on either axis.
 
@@ -32,20 +33,26 @@ struct Decoded {
   std::vector<float> scores;
   std::vector<std::int32_t> class_ids;
   std::int32_t count{-1};
+  // Rows kept before the capacity cut; -1 when not asked for.
+  std::int32_t passed{-1};
 };
 
-Decoded run_kernel(const std::vector<float>& rows, const DecodeParams& params) {
+// Decodes on the GPU; `count_passed` asks the kernel for Decoded::passed.
+Decoded run_kernel(const std::vector<float>& rows, const DecodeParams& params,
+                   bool count_passed = true) {
   float* d_rows = nullptr;
   float* d_boxes = nullptr;
   float* d_scores = nullptr;
   std::int32_t* d_classes = nullptr;
   std::int32_t* d_count = nullptr;
+  std::int32_t* d_passed = nullptr;
   const std::size_t capacity = static_cast<std::size_t>(params.capacity);
   if (cudaMalloc(&d_rows, std::max<std::size_t>(rows.size(), 1) * sizeof(float)) != cudaSuccess ||
       cudaMalloc(&d_boxes, capacity * 4 * sizeof(float)) != cudaSuccess ||
       cudaMalloc(&d_scores, capacity * sizeof(float)) != cudaSuccess ||
       cudaMalloc(&d_classes, capacity * sizeof(std::int32_t)) != cudaSuccess ||
-      cudaMalloc(&d_count, sizeof(std::int32_t)) != cudaSuccess) {
+      cudaMalloc(&d_count, sizeof(std::int32_t)) != cudaSuccess ||
+      cudaMalloc(&d_passed, sizeof(std::int32_t)) != cudaSuccess) {
     throw std::runtime_error("cudaMalloc failed");
   }
   cudaMemcpy(d_rows, rows.data(), rows.size() * sizeof(float), cudaMemcpyHostToDevice);
@@ -54,8 +61,11 @@ Decoded run_kernel(const std::vector<float>& rows, const DecodeParams& params) {
   cudaMemset(d_scores, 0x7F, capacity * sizeof(float));
   cudaMemset(d_classes, 0x7F, capacity * sizeof(std::int32_t));
   cudaMemset(d_count, 0x7F, sizeof(std::int32_t));
-  const cudaError_t status =
-      launch_decode(d_rows, params, DecodeOutputs{d_boxes, d_scores, d_classes, d_count}, nullptr);
+  cudaMemset(d_passed, 0x7F, sizeof(std::int32_t));
+  const cudaError_t status = launch_decode(
+      d_rows, params,
+      DecodeOutputs{d_boxes, d_scores, d_classes, d_count, count_passed ? d_passed : nullptr},
+      nullptr);
   Decoded out;
   out.boxes.resize(capacity * 4);
   out.scores.resize(capacity);
@@ -66,10 +76,13 @@ Decoded run_kernel(const std::vector<float>& rows, const DecodeParams& params) {
   cudaMemcpy(out.class_ids.data(), d_classes, out.class_ids.size() * sizeof(std::int32_t),
              cudaMemcpyDeviceToHost);
   cudaMemcpy(&out.count, d_count, sizeof(std::int32_t), cudaMemcpyDeviceToHost);
+  if (count_passed) {
+    cudaMemcpy(&out.passed, d_passed, sizeof(std::int32_t), cudaMemcpyDeviceToHost);
+  }
   const cudaError_t synced = cudaDeviceSynchronize();
   for (void* p :
        {static_cast<void*>(d_rows), static_cast<void*>(d_boxes), static_cast<void*>(d_scores),
-        static_cast<void*>(d_classes), static_cast<void*>(d_count)}) {
+        static_cast<void*>(d_classes), static_cast<void*>(d_count), static_cast<void*>(d_passed)}) {
     cudaFree(p);
   }
   if (status != cudaSuccess || synced != cudaSuccess) {
@@ -86,12 +99,13 @@ Decoded reference(const std::vector<float>& rows, const DecodeParams& p) {
   out.scores.assign(capacity, 0.0F);
   out.class_ids.assign(capacity, 0);
   std::size_t kept = 0;
+  std::int32_t passed = 0;
   const Letterbox& lb = p.letterbox;
   const auto map = [&](float v, int pad, int limit) {
     return std::fmin(std::fmax((v - static_cast<float>(pad)) / lb.scale, 0.0F),
                      static_cast<float>(limit));
   };
-  for (int r = 0; r < p.rows && kept < capacity; ++r) {
+  for (int r = 0; r < p.rows; ++r) {
     const float* row = rows.data() + static_cast<std::size_t>(r) * kRowFields;
     if (!std::isfinite(row[4]) || !(row[4] >= p.score_threshold) || !std::isfinite(row[5])) {
       continue;
@@ -111,6 +125,10 @@ Decoded reference(const std::vector<float>& rows, const DecodeParams& p) {
     if (!(x2 > x1 && y2 > y1)) {
       continue;
     }
+    ++passed;
+    if (kept == capacity) {
+      continue;
+    }
     out.boxes[4 * kept] = x1;
     out.boxes[4 * kept + 1] = y1;
     out.boxes[4 * kept + 2] = x2;
@@ -120,6 +138,7 @@ Decoded reference(const std::vector<float>& rows, const DecodeParams& p) {
     ++kept;
   }
   out.count = static_cast<std::int32_t>(kept);
+  out.passed = passed;
   return out;
 }
 
@@ -180,6 +199,8 @@ bool same(float a, float b) { return a == b || (std::isnan(a) && std::isnan(b));
 void check_equal(const Decoded& gpu, const Decoded& cpu, const std::string& what) {
   VERIFY_MSG(gpu.count == cpu.count,
              what + ": count " + std::to_string(gpu.count) + " vs " + std::to_string(cpu.count));
+  VERIFY_MSG(gpu.passed == cpu.passed, what + ": passed " + std::to_string(gpu.passed) + " vs " +
+                                           std::to_string(cpu.passed));
   std::size_t wrong = 0;
   for (std::size_t i = 0; i < cpu.boxes.size(); ++i) wrong += !same(gpu.boxes[i], cpu.boxes[i]);
   for (std::size_t i = 0; i < cpu.scores.size(); ++i) {
@@ -197,8 +218,13 @@ void check_random(int rows, int capacity, int width, int height, float threshold
                             .letterbox = lb};
   const auto input = random_rows(rows, 640, static_cast<std::uint32_t>(rows * 7 + capacity));
   const Decoded cpu = reference(input, params);
-  check_equal(run_kernel(input, params), cpu,
-              std::to_string(rows) + " rows into " + std::to_string(capacity));
+  const std::string what = std::to_string(rows) + " rows into " + std::to_string(capacity);
+  check_equal(run_kernel(input, params), cpu, what);
+  // Without counting the passed rows, the kernel may stop at the capacity;
+  // the outputs are the same.
+  Decoded uncounted = run_kernel(input, params, /*count_passed=*/false);
+  uncounted.passed = cpu.passed;
+  check_equal(uncounted, cpu, what + " without counting");
   VERIFY_MSG(cpu.count > 0, "the case keeps some rows");
 }
 
@@ -220,7 +246,7 @@ void check_threshold_boundary() {
   VERIFY(out.scores[0] == threshold && out.scores[2] == 0.0F);
 }
 
-// Kept rows beyond the capacity are dropped, the last ones first.
+// Kept rows beyond the capacity are dropped, the last ones first, and counted.
 void check_capacity() {
   std::vector<float> rows;
   for (int i = 0; i < 10; ++i) {
@@ -234,6 +260,7 @@ void check_capacity() {
                             .letterbox = make_letterbox(640, 640, 640)};
   const Decoded out = run_kernel(rows, params);
   VERIFY(out.count == 3 && out.class_ids[0] == 0 && out.class_ids[1] == 1 && out.class_ids[2] == 2);
+  VERIFY(out.passed == 10);
 }
 
 void check_empty() {

@@ -48,7 +48,8 @@ The decode keeps a row when its score is finite and at least the threshold,
 its class value rounds to a class below `num_classes`, and its box, mapped
 back as `x = (u - pad_left) / r`, `y = (v - pad_top) / r` and clamped to
 `[0, W] x [0, H]`, still has a positive width and height. Kept rows keep their
-order, up to `max_detections`.
+order, up to `max_detections`; when a frame has more, the operator logs a
+warning once per run.
 
 On the COCO image the tests use, the detections match those of Ultralytics'
 own predictor running the same ONNX file with ONNX Runtime to within 0.002 in
