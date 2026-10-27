@@ -129,8 +129,8 @@ void check_camera(const CameraSourceConfig& config);
 // dropped.
 class CameraSourceOp final : public holoscan::Operator<> {
  public:
-  // Opens the device and sets its format.
-  // @throws std::invalid_argument as check_camera() does.
+  // The device is opened in start() and closed in stop(), not here: the runtime may
+  // construct an operator more than once, and a camera serves one owner at a time.
   explicit CameraSourceOp(CameraSourceConfig config);
   ~CameraSourceOp() override;
 

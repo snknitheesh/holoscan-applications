@@ -376,7 +376,14 @@ int open_camera(const CameraSourceConfig& config, std::size_t& pitch) {
   format.fmt.pix.height = static_cast<std::uint32_t>(config.height);
   format.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
   format.fmt.pix.field = V4L2_FIELD_NONE;
-  if (xioctl(fd, VIDIOC_S_FMT, &format) != 0 || format.fmt.pix.pixelformat != V4L2_PIX_FMT_YUYV ||
+  if (xioctl(fd, VIDIOC_S_FMT, &format) != 0) {
+    const int error = errno;
+    close(fd);
+    throw std::invalid_argument("cannot set YUYV " + std::to_string(config.width) + "x" +
+                                std::to_string(config.height) + " on " + name + ": " +
+                                std::strerror(error));
+  }
+  if (format.fmt.pix.pixelformat != V4L2_PIX_FMT_YUYV ||
       format.fmt.pix.width != static_cast<std::uint32_t>(config.width) ||
       format.fmt.pix.height != static_cast<std::uint32_t>(config.height)) {
     const std::string offered = yuyv_sizes(fd);
@@ -396,9 +403,7 @@ void check_camera(const CameraSourceConfig& config) {
   close(open_camera(config, pitch));
 }
 
-CameraSourceOp::CameraSourceOp(CameraSourceConfig config) : config_(std::move(config)) {
-  fd_ = open_camera(config_, pitch_);
-}
+CameraSourceOp::CameraSourceOp(CameraSourceConfig config) : config_(std::move(config)) {}
 
 CameraSourceOp::~CameraSourceOp() { release(); }
 
@@ -432,6 +437,8 @@ holoscan::Contract CameraSourceOp::contract() const {
 }
 
 void CameraSourceOp::start() {
+  release();
+  fd_ = open_camera(config_, pitch_);
   emitted_ = 0;
   v4l2_requestbuffers request{};
   request.count = kCameraBuffers;
@@ -472,6 +479,7 @@ void CameraSourceOp::stop() {
   request.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
   request.memory = V4L2_MEMORY_MMAP;
   xioctl(fd_, VIDIOC_REQBUFS, &request);
+  release();
 }
 
 holoscan::expected<void, holoscan::Error> CameraSourceOp::compute(
