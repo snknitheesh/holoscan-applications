@@ -29,6 +29,11 @@ flowchart LR
     S -->|with --display| V
 ```
 
+## Demo
+
+Videos of the application on synthetic input and on real input go in
+[tests/video](tests/video).
+
 ## What it computes
 
 The model takes a square `S x S` input (`S` = 640 by default). An image of
